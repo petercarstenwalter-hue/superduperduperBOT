@@ -1,8 +1,6 @@
 # bot.py
 import os
-
 API_TOKEN = os.getenv("LICHESS_TOKEN")
-import os
 import math
 import time
 import traceback
@@ -474,7 +472,6 @@ def run_lichess_bot():
     except Exception as e:
         print("Fatal error in stream_incoming_events:", e)
         traceback.print_exc()
-
 
 # ---------------------------
 # Entry point
