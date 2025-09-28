@@ -1,7 +1,0 @@
-# railway.toml
-[build]
-builder = "python"
-
-[deploy]
-startCommand = "python bot.py"
-restartPolicyType = "always"
