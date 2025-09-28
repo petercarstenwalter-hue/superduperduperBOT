@@ -1,5 +1,8 @@
 # bot.py
 import os
+
+API_TOKEN = os.getenv("LICHESS_TOKEN")
+import os
 import math
 import time
 import traceback
