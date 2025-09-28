@@ -1,0 +1,258 @@
+import chess
+import chess.polyglot
+import math
+from collections import defaultdict
+
+# Constants
+WHITE = chess.WHITE
+BLACK = chess.BLACK
+BASE_SEARCH_DEPTH = 10  # ply at start of game
+
+# Starting piece counts for promotion detection
+STARTING_COUNTS = {
+    WHITE: {chess.PAWN: 8, chess.KNIGHT: 2, chess.BISHOP: 2, chess.ROOK: 2, chess.QUEEN: 1, chess.KING: 1},
+    BLACK: {chess.PAWN: 8, chess.KNIGHT: 2, chess.BISHOP: 2, chess.ROOK: 2, chess.QUEEN: 1, chess.KING: 1}
+}
+
+def square_rank(sq):
+    return chess.square_rank(sq)  # 0..7
+
+def square_file(sq):
+    return chess.square_file(sq)  # 0..7
+
+def sign(x):
+    return 1 if x > 0 else (-1 if x < 0 else 0)
+
+def evaluate_board(board: chess.Board) -> float:
+    """
+    Returns a floating-point evaluation where:
+    + is good for White, - is good for Black.
+    Implements the heuristic rules you specified.
+    """
+    # Terminal conditions
+    if board.is_checkmate():
+        if board.turn == BLACK:
+            return math.inf  # black king checkmated
+        else:
+            return -math.inf  # white king checkmated
+    if board.is_stalemate():
+        return 0.0
+
+    score = 0.0
+
+    # 1) Doubled pawns
+    files_white = [0]*8
+    files_black = [0]*8
+    for sq in board.pieces(chess.PAWN, WHITE):
+        files_white[square_file(sq)] += 1
+    for sq in board.pieces(chess.PAWN, BLACK):
+        files_black[square_file(sq)] += 1
+    for f in range(8):
+        if files_white[f] > 1:
+            score -= (files_white[f] - 1)
+        if files_black[f] > 1:
+            score += (files_black[f] - 1)
+
+    # 2) Control of squares
+    white_pawn_attacks = set()
+    black_pawn_attacks = set()
+    for sq in board.pieces(chess.PAWN, WHITE):
+        for t in board.attacks(sq):
+            white_pawn_attacks.add(t)
+    for sq in board.pieces(chess.PAWN, BLACK):
+        for t in board.attacks(sq):
+            black_pawn_attacks.add(t)
+
+    for sq in chess.SQUARES:
+        wc = 0
+        bc = 0
+        white_ctrl = len(board.attackers(WHITE, sq))
+        black_ctrl = len(board.attackers(BLACK, sq))
+        if white_ctrl > 0:
+            if sq not in black_pawn_attacks:
+                wc = white_ctrl
+        if black_ctrl > 0:
+            if sq not in white_pawn_attacks:
+                bc = black_ctrl
+        score += (wc - bc)
+
+    # 3) Pawn progress
+    for sq in board.pieces(chess.PAWN, WHITE):
+        r = square_rank(sq)
+        score += 0.2 * (7 - r)
+    for sq in board.pieces(chess.PAWN, BLACK):
+        r = square_rank(sq)
+        score -= 0.2 * r
+
+    # 4) King safety (squares around kings)
+    def king_ring_sq(kingsq):
+        ring = []
+        kr = square_rank(kingsq)
+        kf = square_file(kingsq)
+        for dr in (-1,0,1):
+            for df in (-1,0,1):
+                if dr == 0 and df == 0:
+                    continue
+                nr = kr + dr
+                nf = kf + df
+                if 0 <= nr <= 7 and 0 <= nf <= 7:
+                    ring.append(chess.square(nf, nr))
+        return ring
+
+    if board.king(BLACK) is not None:
+        for sq in king_ring_sq(board.king(BLACK)):
+            if len(board.attackers(WHITE, sq)) > 0:
+                score += 2
+    if board.king(WHITE) is not None:
+        for sq in king_ring_sq(board.king(WHITE)):
+            if len(board.attackers(BLACK, sq)) > 0:
+                score -= 2
+
+    # 5) Isolated pawns
+    for color in (WHITE, BLACK):
+        pawns_by_file = defaultdict(list)
+        for sq in board.pieces(chess.PAWN, color):
+            pawns_by_file[square_file(sq)].append(sq)
+        for f in range(8):
+            if len(pawns_by_file[f]) == 0:
+                continue
+            left = f-1
+            right = f+1
+            has_adjacent = False
+            if left >= 0 and len(pawns_by_file[left]) > 0:
+                has_adjacent = True
+            if right <= 7 and len(pawns_by_file[right]) > 0:
+                has_adjacent = True
+            if not has_adjacent:
+                count = len(pawns_by_file[f])
+                if color == WHITE:
+                    score -= count
+                else:
+                    score += count
+
+    # 6) Backward pawns
+    for sq in board.pieces(chess.PAWN, WHITE):
+        r = square_rank(sq)
+        f = square_file(sq)
+        if r == 7: continue
+        adj_support = False
+        for df in (-1,1):
+            nf = f+df
+            if 0 <= nf <= 7:
+                for r2 in range(r+1,8):
+                    if chess.square(nf,r2) in board.pieces(chess.PAWN, WHITE):
+                        adj_support = True
+                        break
+                if adj_support: break
+        front_sq = chess.square(f, r+1)
+        if not adj_support and len(board.attackers(BLACK, front_sq)) > 0:
+            score -= 1
+    for sq in board.pieces(chess.PAWN, BLACK):
+        r = square_rank(sq)
+        f = square_file(sq)
+        if r == 0: continue
+        adj_support = False
+        for df in (-1,1):
+            nf = f+df
+            if 0 <= nf <= 7:
+                for r2 in range(r-1,-1,-1):
+                    if chess.square(nf,r2) in board.pieces(chess.PAWN, BLACK):
+                        adj_support = True
+                        break
+                if adj_support: break
+        front_sq = chess.square(f, r-1)
+        if not adj_support and len(board.attackers(WHITE, front_sq)) > 0:
+            score += 1
+
+    return float(score)
+
+def compute_dynamic_depth(board: chess.Board, base_depth=BASE_SEARCH_DEPTH) -> int:
+    depth = base_depth
+    current_counts = {WHITE: defaultdict(int), BLACK: defaultdict(int)}
+    for color in (WHITE, BLACK):
+        for ptype in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
+            current_counts[color][ptype] = len(board.pieces(ptype, color))
+    for color in (WHITE, BLACK):
+        for p in (chess.KNIGHT, chess.BISHOP, chess.ROOK):
+            depth += (STARTING_COUNTS[color][p] - current_counts[color][p])
+        depth += 2 * (STARTING_COUNTS[color][chess.QUEEN] - current_counts[color][chess.QUEEN])
+    for color in (WHITE, BLACK):
+        for promoted_ptype in (chess.QUEEN, chess.KNIGHT, chess.BISHOP, chess.ROOK):
+            extra = current_counts[color][promoted_ptype] - STARTING_COUNTS[color][promoted_ptype]
+            if extra > 0:
+                depth -= 2*extra if promoted_ptype == chess.QUEEN else extra
+    return max(1, depth)
+
+def negamax(board: chess.Board, depth: int, alpha: float, beta: float, color_multiplier: int, pruning_threshold: int) -> float:
+    if board.is_checkmate() or board.is_stalemate() or depth == 0:
+        return evaluate_board(board)
+    max_eval = -math.inf
+    legal_moves = list(board.legal_moves)
+    def move_key(m):
+        return (board.is_capture(m), board.gives_check(m))
+    legal_moves.sort(key=move_key, reverse=True)
+    use_pruning = (depth >= pruning_threshold)
+    for move in legal_moves:
+        board.push(move)
+        score = -negamax(board, depth-1, -beta, -alpha, -color_multiplier, pruning_threshold)
+        board.pop()
+        if score > max_eval:
+            max_eval = score
+        if use_pruning:
+            if score > alpha: alpha = score
+            if alpha >= beta: return max_eval
+    return max_eval if max_eval != -math.inf else evaluate_board(board)
+
+def select_best_move(board: chess.Board):
+    dynamic_depth = compute_dynamic_depth(board)
+    extra_ply = max(0, dynamic_depth - BASE_SEARCH_DEPTH)
+    pruning_threshold = 4 + ((extra_ply // 5) * 2)
+    best_move = None
+    best_score = -math.inf
+    alpha = -math.inf
+    beta = math.inf
+    legal_moves = list(board.legal_moves)
+    legal_moves.sort(key=lambda m: (board.is_capture(m), board.gives_check(m)), reverse=True)
+    for move in legal_moves:
+        board.push(move)
+        score = -negamax(board, dynamic_depth-1, -beta, -alpha, -1, pruning_threshold)
+        board.pop()
+        if score > best_score:
+            best_score = score
+            best_move = move
+        if score > alpha: alpha = score
+    return best_move, best_score, dynamic_depth, pruning_threshold
+
+def main():
+    print("Custom chess bot CLI. + is good for White, - for Black.")
+    board = chess.Board()
+    while True:
+        print("\nBoard FEN:", board.fen())
+        print(board)
+        print("Side to move:", "White" if board.turn == WHITE else "Black")
+        cmd = input("Enter move (UCI), 'bot', 'fen', or 'quit': ").strip()
+        if cmd == "quit":
+            break
+        if cmd == "bot":
+            move, score, depth, pruning_threshold = select_best_move(board)
+            print(f"Bot plays {move}, eval {score}, depth {depth}, prune_th={pruning_threshold}")
+            board.push(move)
+            continue
+        if cmd == "fen":
+            fen = input("Enter FEN:\n> ").strip()
+            try:
+                board = chess.Board(fen)
+            except Exception as e:
+                print("Invalid FEN:", e)
+            continue
+        try:
+            move = chess.Move.from_uci(cmd)
+            if move in board.legal_moves:
+                board.push(move)
+            else:
+                print("Illegal move.")
+        except Exception as e:
+            print("Error parsing move:", e)
+
+if __name__ == "__main__":
+    main()
